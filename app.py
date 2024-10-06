@@ -114,7 +114,7 @@ def selector():
     conn = sqlite3.connect('data.db')
     df = pd.read_sql_query(f"SELECT * from planets", conn)
     if max_size: 
-        df = df.sample(n=1000).sort_index(ascending=True)
+        df = df.sample(n=max_size).sort_index(ascending=True)
     ret = df[['pl_name', 'pl_bmasse', 'pl_orbincl', 'pl_eqt', 'st_teff', 'st_lum', 'st_vsin', 'ra', 'dec', 'sy_dist', 'sy_bmag', 'sy_vmag']]
     ret = ret.dropna(subset=NO_NANS)
     ret = ret.drop_duplicates(subset='pl_name', keep='first')
