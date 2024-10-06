@@ -173,7 +173,7 @@ def generate_text():
 def generate_image():
     yapper = IMAGE_BOT
     url = request.args.get('url')
-    response = client.chat.completions.create(
+    completion = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
             {
