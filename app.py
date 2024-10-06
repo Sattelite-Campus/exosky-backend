@@ -4,7 +4,12 @@ from setup import setup
 import argparse
 import sqlite3
 import pandas as pd
-#from openai import OpenAI
+from openai import OpenAI
+from dotenv import load_dotenv
+import os
+
+# Load .env
+load_dotenv()
 
 ### GLOBALS
 global sample
@@ -12,9 +17,13 @@ global sample
 ### CONSTANTS
 TEXT_BOT = """You are telling an awe-inspiring story about the stars in the night sky."""
 IMAGE_BOT = """Tell an awe-inspiring story about this constellation!"""
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+NO_NANS = ['ra', 'dec', 'sy_dist', 'sy_vmag', 'sy_bmag']
+IS_RESET = False
 
+### INIT MODULES
 app = Flask(__name__)
-#client = OpenAI()
+client = OpenAI(api_key=OPENAI_API_KEY)
 
 def reset():
     setup()
@@ -69,7 +78,17 @@ def process_row(row, col):
     # Convert back
     ra_final, dec_final, dist_final = cartesian_to_radec(x_final, y_final, z_final)
     
-    return pd.Series({'sy_name': row['sy_name'], 'ra': ra_final, 'dec': dec_final, 'sy_dist': dist_final, 'sy_vmag': row['sy_vmag']})
+    return pd.Series({
+        'sy_name': row['sy_name'],
+        'ra': ra_final,
+        'dec': dec_final,
+        'sy_dist': dist_final,
+        'sy_vmag': row['sy_vmag'],
+        'sy_bmag': row['sy_bmag'],
+        'st_lum': row['st_lum'],
+        'st_mass': row['st_mass'],
+        'st_teff': row['st_teff']
+    })
 
 # TESTING ONLY
 @app.route('/radec_cartesian', methods=['GET'])
@@ -83,38 +102,55 @@ def radec_cartesian():
 # TESTING ONLY
 @app.route('/cartesian_radec', methods=['GET'])
 def cartesian_radec():
-    x = float(request.args.get('x'))
-    y = float(request.args.get('y'))
-    z = float(request.args.get('z'))
+    x = request.args.get('x', type=float)
+    y = request.args.get('y', type=float)
+    z = request.args.get('z', type=float)
     ret = cartesian_to_radec(x, y, z)
     return jsonify({'ra': ret[0], 'dec': ret[1], 'distance': ret[2]})
 
 @app.route('/selector')
 def selector(): 
+    max_size = request.args.get('max', default=None, type=int)
     conn = sqlite3.connect('data.db')
     df = pd.read_sql_query(f"SELECT * from planets", conn)
-    df_sample = df.sample(n=1000).sort_index(ascending=True)
-    ret = df_sample[['pl_name', 'pl_bmasse', 'pl_orbper', 'pl_eqt', 'pl_orbeccen', 'pl_insol', 'st_spectype', 'st_teff', 'st_rad', 'ra', 'dec', 'sy_dist']]
+    if max_size: 
+        df = df.sample(n=1000).sort_index(ascending=True)
+    ret = df[['pl_name', 'pl_bmasse', 'pl_orbincl', 'pl_eqt', 'st_teff', 'st_lum', 'st_vsin', 'ra', 'dec', 'sy_dist', 'sy_bmag', 'sy_vmag']]
+    ret = ret.dropna(subset=NO_NANS)
+    ret = ret.drop_duplicates(subset='pl_name', keep='first')
     global sample
     sample = ret
     return ret.to_json(orient="index")
 
 @app.route('/render')
 def render():
-    selected_idx = int(request.args.get('index'))
+    max_size = request.args.get('max', default=None, type=int)
+    selected_idx = request.args.get('index', type=int)
     global sample
     col = sample.iloc[selected_idx]
     conn = sqlite3.connect('data.db')
     df = pd.read_sql_query(f"SELECT * from stars", conn)
-    df = df[['sy_name', 'ra', 'dec', 'sy_dist', 'sy_vmag']]
+    if max_size:
+        df = df.sample(n=max_size).sort_index(ascending=True)
+    df = df[['sy_name', 'ra', 'dec', 'sy_dist', 'sy_vmag', 'sy_bmag', 'st_lum', 'st_mass', 'st_teff']]
+    df = df.dropna(subset=NO_NANS)
+    df = df.drop_duplicates(subset='sy_name', keep='first')
     df = df.apply(process_row, axis=1, col=col)
     df_sorted = df.sort_values(by='sy_dist', ascending=True)
-    df_sorted = df_sorted.head(1000)
-    print(df_sorted)
-    df_sorted['sy_vmag'] = df_sorted['sy_vmag'].apply(brightness)
+    if max_size:
+        df_sorted = df_sorted.head(max_size)
     planet_json = col.to_json()
     stars_json = df_sorted.to_json(orient='index')
     return jsonify({"planet": planet_json, "stars": stars_json})
+
+@app.route('/extra')
+def extra():
+    max_size = request.args.get('max', default=None, type=int)
+    conn = sqlite3.connect('data.db')
+    df = pd.read_sql_query(f"SELECT * from koi", conn)
+    if max_size():
+        df = df.sample(n=1000).sort_index(ascending=True)
+    return df.to_json(orient='index')
 
 @app.route('/generate_text')
 def generate_text():
@@ -164,7 +200,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Optional DB reset")
     parser.add_argument('--reset', action='store_true', help="Reset the DB")
     args = parser.parse_args()
-    if args.reset:
+    if args.reset and not IS_RESET:
         print("DB reset initated")
         reset()
+        is_reset = True
     app.run(debug=True)
