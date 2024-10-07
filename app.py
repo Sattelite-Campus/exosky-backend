@@ -7,6 +7,9 @@ import pandas as pd
 from openai import OpenAI
 from dotenv import load_dotenv
 import os
+import base64
+from mimetypes import guess_type
+from flask_cors import CORS
 
 # Load .env
 load_dotenv()
@@ -16,17 +19,37 @@ global sample
 
 ### CONSTANTS
 TEXT_BOT = """You are telling an awe-inspiring story about the stars in the night sky."""
-IMAGE_BOT = """Tell an awe-inspiring story about this constellation!"""
 OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
 NO_NANS = ['ra', 'dec', 'sy_dist', 'sy_vmag', 'sy_bmag']
 IS_RESET = False
+UPLOAD_FOLDER = "./uploads"
 
 ### INIT MODULES
 app = Flask(__name__)
+CORS(app)
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 def reset():
     setup()
+
+def delete_images(folder_path):
+    for filename in os.listdir(folder_path):
+        file_path = os.path.join(folder_path, filename)
+        os.unlink(file_path)
+
+def local_image_to_data_url(image_path):
+    # Guess the MIME type of the image based on the file extension
+    mime_type, _ = guess_type(image_path)
+    if mime_type is None:
+        mime_type = 'application/octet-stream'  # Default MIME type if none is found
+
+    # Read and encode the image file
+    with open(image_path, "rb") as image_file:
+        base64_encoded_data = base64.b64encode(image_file.read()).decode('utf-8')
+
+    # Construct the data URL
+    return f"data:{mime_type};base64,{base64_encoded_data}"
 
 def radec_to_cartesian(ra, dec, distance):
     ra_rad = ra / 12 * math.pi  # Convert RA to radians
@@ -167,12 +190,25 @@ def generate_text():
             }
         ]
     )
-    return jsonify({'message': completion.choices[0].message})
+    return jsonify({'message': completion.choices[0].message.content})
 
 @app.route('/generate_image')
 def generate_image():
-    yapper = IMAGE_BOT
-    url = request.args.get('url')
+    uploads_folder = './uploads'
+    image_file = None
+    for filename in os.listdir(uploads_folder):
+        if filename.lower().endswith(('.png', '.jpg', '.jpeg', '.gif')):  # Add other extensions if needed
+            image_file = os.path.join(uploads_folder, filename)
+            break  # Assuming there's only one image
+    if not image_file:
+        return jsonify({'error': 'No image found in the uploads folder.'}), 400
+    data_url = local_image_to_data_url(image_file)
+    #url = request.args.get('url')
+    city = request.args.get('city')
+    country = request.args.get('country')
+    yapper = f"""
+    Given this fictional constellation image, generate a name and an engaging story, considering cultural views from {city}, {country}
+    """
     completion = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[
@@ -183,15 +219,51 @@ def generate_image():
                 {
                 "type": "image_url",
                 "image_url": {
-                    "url": url,
+                    "url": data_url,
                 },
                 },
             ],
             }
-        ],
-        max_tokens=300,
+        ]
     )
-    return jsonify({'message': completion.choices[0].message})
+    return jsonify({'message': completion.choices[0].message.content})
+
+@app.route('/generate_image_b64')
+def generate_image_b64():
+    b64 = request.args.get('b64')
+    city = request.args.get('city')
+    country = request.args.get('country')
+    yapper = f"""
+    Given this fictional constellation image, generate a name and an engaging story, considering cultural views from {city}, {country}
+    """
+    completion = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": yapper},
+                {"type": "image_url",
+                "image_url": {
+                    "url": f"data:image/png;base64,{b64}"
+                }
+                }
+            ]}
+        ]
+    )
+    return jsonify({'message': completion.choices[0].message.content})
+
+@app.route('/upload', methods=['POST'])
+def upload():
+    if 'file' not in request.files:
+        return jsonify({'error': 'No file part in the request'}), 400
+    file = request.files['file']
+    if file.filename == '':
+        return jsonify({'error': 'No selected file'}), 400
+    delete_images(app.config['UPLOAD_FOLDER'])
+    filepath = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
+    file.save(filepath)
+    return jsonify({'message': 'File uploaded successfully', 'path': filepath})
 
 @app.route('/')
 def home():
@@ -205,4 +277,4 @@ if __name__ == "__main__":
         print("DB reset initated")
         reset()
         is_reset = True
-    app.run(debug=True)
+    app.run(host="0.0.0.0", debug=True, port=5000)
