@@ -136,14 +136,13 @@ def selector():
     max_size = request.args.get('max', default=None, type=int)
     conn = sqlite3.connect('data.db')
     df = pd.read_sql_query(f"SELECT * from planets", conn)
-    if max_size: 
-        df = df.sample(n=max_size).sort_index(ascending=True)
     ret = df[['pl_name', 'pl_bmasse', 'pl_orbincl', 'pl_eqt', 'st_teff', 'st_lum', 'st_vsin', 'ra', 'dec', 'sy_dist', 'sy_bmag', 'sy_vmag']]
     ret = ret.dropna(subset=NO_NANS)
     ret = ret.drop_duplicates(subset='pl_name', keep='first')
-    ret.to_sql('sample', conn, if_exists='replace', index=False)
-    conn.commit()
-    conn.close()
+    if max_size: 
+        ret = ret.sample(n=max_size).sort_index(ascending=True)
+    ret.to_sql('sample', conn, if_exists='replace', index=True)
+    sample = pd.read_sql_query(f'SELECT * FROM sample', conn)
     return ret.to_json(orient="index")
 
 @app.route('/render')
@@ -152,7 +151,7 @@ def render():
     selected_idx = request.args.get('index', type=int)
     conn = sqlite3.connect('data.db')
     sample = pd.read_sql_query(f'SELECT * FROM sample', conn)
-    col = sample.iloc[selected_idx]
+    col = sample[sample['index'] == selected_idx]
     df = pd.read_sql_query(f"SELECT * from stars", conn)
     if max_size:
         df = df.sample(n=max_size).sort_index(ascending=True)
